@@ -83,7 +83,7 @@ class MLPBlock(torch.nn.Module):
     def __init__(self,
                  embedding_dim:int=768,
                  mlp_size:int=3072,
-                 drpout:float=0.1):
+                 dropout:float=0.1):
         super().__init__()
         
         self.layer_norm = torch.nn.LayerNorm(normalized_shape=embedding_dim)
@@ -91,13 +91,36 @@ class MLPBlock(torch.nn.Module):
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(in_features=embedding_dim,
                             out_features=mlp_size),
-            torch.nn.GELU(p=drpout),
+            torch.nn.GELU(p=dropout),
             torch.nn.Linear(in_features=mlp_size,
                             out_features=embedding_dim),
-            torch.nn.Dropout(p=drpout)
+            torch.nn.Dropout(p=dropout)
         )
         
     def forward(self, x):
         x = self.layer_norm(x)
         x = self.mlp(x)
+        return x
+    
+class TransformerEncoder(torch.nn.Module):
+    def __init__(self,
+                 embedding_dim:int=768,
+                 mlp_size:int=3072,
+                 mlp_dropout:float=0.1,
+                 attn_dropout:float=0,
+                 num_heads:int=12,
+                 ):
+        super().__init__()
+        
+        self.msa_block = MultiheadSelfAttention(embedding_dim=embedding_dim,
+                                                num_heads=num_heads,
+                                                attn_dropout=attn_dropout)
+        
+        self.mlp_block = MLPBlock(embedding_dim=embedding_dim,
+                                  mlp_size=mlp_size,
+                                  dropout=mlp_dropout)
+        
+    def forward(self, x):
+        x = self.msa_block(x) + x
+        x = self.mlp_block(x) + x
         return x
