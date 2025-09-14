@@ -4,13 +4,16 @@ class PatchAndEmbed(torch.nn.Module):
     def __init__(self,
                  in_channels:int=3,
                  patch_size:int=16,
-                 embedding_dim:int=768):
+                 embedding_dim:int=768,
+                 batch_size:int=16,
+                 img_size=224):
         
         super().__init__()
         
-        num_patches = (224 // patch_size) ** 2
+        num_patches = (img_size // patch_size) ** 2
         num_tokens = num_patches * 2 + 1
         
+        self.batch_size = batch_size
         self.patches_spatial = torch.nn.Conv2d(in_channels=in_channels,
                                                out_channels=embedding_dim,
                                                kernel_size=patch_size,
@@ -49,7 +52,7 @@ class PatchAndEmbed(torch.nn.Module):
         
         x_spatial_freq = torch.cat((x_spatial, x_freq), dim=1)
         
-        class_token = self.class_embed
+        class_token = self.class_embed.expand(self.batch_size, -1, -1)
         x_tokens = torch.cat((x_spatial_freq, class_token), dim=1)
         
         position_embed = self.position_embed
@@ -91,7 +94,7 @@ class MLPBlock(torch.nn.Module):
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(in_features=embedding_dim,
                             out_features=mlp_size),
-            torch.nn.GELU(p=dropout),
+            torch.nn.GELU(),
             torch.nn.Linear(in_features=mlp_size,
                             out_features=embedding_dim),
             torch.nn.Dropout(p=dropout)
@@ -123,4 +126,48 @@ class TransformerEncoder(torch.nn.Module):
     def forward(self, x):
         x = self.msa_block(x) + x
         x = self.mlp_block(x) + x
+        return x
+    
+class ViT(torch.nn.Module):
+    def __init__(self,
+                 batch_size:int=16,
+                 img_size:int=224,
+                 in_channels:int=3,
+                 patch_size:int=16,
+                 num_transformer_layers:int=12,
+                 embedding_dim:int=768,
+                 mlp_size:int=3072,
+                 num_heads:int=12,
+                 attn_dropout:float=0,
+                 mlp_dropout:float=0.1,
+                 embedding_dropout:float=0.1,
+                 num_classes:int=2):
+        super().__init__()
+        
+        self.patch_and_embed = PatchAndEmbed(in_channels=in_channels,
+                                             patch_size=patch_size,
+                                             embedding_dim=embedding_dim,
+                                             batch_size=batch_size,
+                                             img_size=img_size)
+        self.embedding_dropout = torch.nn.Dropout(p=embedding_dropout)
+        
+        self.transformer_encoder = torch.nn.Sequential(
+            *[TransformerEncoder(embedding_dim=embedding_dim,
+                                 mlp_size=mlp_size,
+                                 mlp_dropout=mlp_dropout,
+                                 attn_dropout=attn_dropout,
+                                 num_heads=num_heads) for _ in range(num_transformer_layers)]
+        )
+        
+        self.classifier = torch.nn.Sequential(
+            torch.nn.LayerNorm(normalized_shape=embedding_dim),
+            torch.nn.Linear(in_features=embedding_dim,
+                            out_features=num_classes)
+        )
+        
+    def forward(self, x):
+        x = self.patch_and_embed(x)
+        x = self.embedding_dropout(x)
+        x = self.transformer_encoder(x)
+        x = self.classifier(x[:, 0])
         return x
