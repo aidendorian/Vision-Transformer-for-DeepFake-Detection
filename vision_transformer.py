@@ -1,5 +1,5 @@
 import torch
-
+        
 class PatchAndEmbed(torch.nn.Module):
     def __init__(self,
                  in_channels:int=3,
@@ -105,6 +105,50 @@ class MLPBlock(torch.nn.Module):
         x = self.mlp(x)
         return x
     
+class MIMHead(torch.nn.Module):
+    def __init__(self,
+                 embedding_dim:int=768,
+                 patch_size:int=16,
+                 in_channels:int=3,
+                 mode:str="linear"):
+        super().__init__()
+        
+        self.mode = mode
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.target_dim = in_channels * patch_size**2
+        
+        if mode == "linear":
+            self.proj = torch.nn.Linear(in_features=embedding_dim, out_features=self.target_dim)
+            
+        elif mode == "conv":
+            hidden = embedding_dim//2
+            self.token_to_feat = torch.nn.Linear(in_features=embedding_dim, out_features=hidden*(patch_size//4)**2)
+            self.decoder = torch.nn.Sequential(
+                torch.nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                torch.nn.Conv2d(in_channels=hidden, out_channels=hidden//2, kernel_size=3, padding=1),
+                torch.nn.GELU(),
+                torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+                torch.nn.Conv2d(out_channels=hidden//2, out_channels=in_channels, kernel_size=3, padding=1)
+            )
+            
+        else:
+            raise ValueError("mode can only be either 'linear' or 'conv'")
+        
+    def forward(self, x):
+        B, N, D = x.shape
+        
+        if self.mode == "linear":
+            return self.proj(x)
+        
+        elif self.mode == "conv":
+            feat = self.token_to_feat(x)
+            s = self.patch_size//4
+            hidden = feat.shape[-1]//(s*s)
+            feat = feat.view(B*N, hidden, s, s)
+            out = self.decoder(feat)
+            return out.view(B, N, -1)
+
 class TransformerEncoder(torch.nn.Module):
     def __init__(self,
                  embedding_dim:int=768,
@@ -165,9 +209,14 @@ class ViT(torch.nn.Module):
                             out_features=num_classes)
         )
         
+        self.projection_head = MIMHead(embedding_dim=embedding_dim,
+                                       patch_size=patch_size,
+                                       in_channels=in_channels,
+                                       mode="linear")
+        
     def forward(self, x):
         x = self.patch_and_embed(x)
         x = self.embedding_dropout(x)
         x = self.transformer_encoder(x)
-        x = self.classifier(x[:, 0])
+        x = self.projection_head(x)
         return x
