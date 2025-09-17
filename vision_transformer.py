@@ -76,7 +76,7 @@ class MultiheadSelfAttention(torch.nn.Module):
         
     def forward(self, x):
         x = self.layer_norm(x)
-        attn_output = self.multihead_attn(query=x,
+        attn_output, _ = self.multihead_attn(query=x,
                                           key=x,
                                           value=x,
                                           need_weights=False)
@@ -129,7 +129,7 @@ class MIMHead(torch.nn.Module):
                 torch.nn.Conv2d(in_channels=hidden, out_channels=hidden//2, kernel_size=3, padding=1),
                 torch.nn.GELU(),
                 torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-                torch.nn.Conv2d(out_channels=hidden//2, out_channels=in_channels, kernel_size=3, padding=1)
+                torch.nn.Conv2d(in_channels=hidden//2, out_channels=in_channels, kernel_size=3, padding=1)
             )
             
         else:
@@ -184,8 +184,7 @@ class ViT(torch.nn.Module):
                  num_heads:int=12,
                  attn_dropout:float=0,
                  mlp_dropout:float=0.1,
-                 embedding_dropout:float=0.1,
-                 num_classes:int=2):
+                 embedding_dropout:float=0.1):
         super().__init__()
         
         self.patch_and_embed = PatchAndEmbed(in_channels=in_channels,
@@ -201,12 +200,6 @@ class ViT(torch.nn.Module):
                                  mlp_dropout=mlp_dropout,
                                  attn_dropout=attn_dropout,
                                  num_heads=num_heads) for _ in range(num_transformer_layers)]
-        )
-        
-        self.classifier = torch.nn.Sequential(
-            torch.nn.LayerNorm(normalized_shape=embedding_dim),
-            torch.nn.Linear(in_features=embedding_dim,
-                            out_features=num_classes)
         )
         
         self.projection_head = MIMHead(embedding_dim=embedding_dim,
