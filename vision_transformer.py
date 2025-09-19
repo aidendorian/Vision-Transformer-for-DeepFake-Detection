@@ -6,12 +6,17 @@ class PatchAndEmbed(torch.nn.Module):
                  patch_size:int=16,
                  embedding_dim:int=768,
                  batch_size:int=16,
-                 img_size=224):
-        
+                 img_size=224,
+                 phase:str="pretraining"):
         super().__init__()
         
+        self.phase = phase
         num_patches = (img_size // patch_size) ** 2
-        num_tokens = num_patches * 2 + 1
+        
+        if phase == "pretraining":
+            num_tokens = num_patches * 2
+        elif phase == "fine-tuning":
+            num_tokens = num_patches * 2 + 1
         
         self.batch_size = batch_size
         self.patches_spatial = torch.nn.Conv2d(in_channels=in_channels,
@@ -26,10 +31,10 @@ class PatchAndEmbed(torch.nn.Module):
                                             stride=patch_size,
                                             padding=0)
         
-        self.class_embed = torch.nn.Parameter(torch.zeros(1, 1, embedding_dim),
+        self.class_embed = torch.nn.Parameter(torch.randn(1, 1, embedding_dim),
                                               requires_grad=True)
         
-        self.position_embed = torch.nn.Parameter(torch.zeros(1, num_tokens, embedding_dim),
+        self.position_embed = torch.nn.Parameter(torch.randn(1, num_tokens, embedding_dim),
                                                  requires_grad=True)
         
         self.flatten = torch.nn.Flatten(start_dim=2,
@@ -52,11 +57,18 @@ class PatchAndEmbed(torch.nn.Module):
         
         x_spatial_freq = torch.cat((x_spatial, x_freq), dim=1)
         
-        class_token = self.class_embed.expand(self.batch_size, -1, -1)
-        x_tokens = torch.cat((x_spatial_freq, class_token), dim=1)
+        if self.phase == "fine-tuning":
+            class_token = self.class_embed.expand(self.batch_size, -1, -1)
+            x_tokens = torch.cat((x_spatial_freq, class_token), dim=1)
+            position_embed = self.position_embed
+            x_tokens = x_tokens + position_embed
+            
+        elif self.phase == "pretraining":
+            position_embed = self.position_embed
+            x_tokens = x_spatial_freq + position_embed
         
-        position_embed = self.position_embed
-        x_tokens = x_tokens + position_embed
+        else:
+            raise ValueError("phase can only be 'fine_tuning' or 'pretraining'")        
         
         return x_tokens
     
@@ -184,14 +196,29 @@ class ViT(torch.nn.Module):
                  num_heads:int=12,
                  attn_dropout:float=0,
                  mlp_dropout:float=0.1,
-                 embedding_dropout:float=0.1):
+                 embedding_dropout:float=0.1,
+                 phase:str="pretraining",
+                 projection_head_mode:str="linear",
+                 mask_ratio:float=0.75,
+                 num_classes:int=2):
         super().__init__()
+        
+        self.mask_ratio = mask_ratio
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.phase = phase
+        
+        self.mask_token = torch.nn.Parameter(torch.zeros(1, 1, embedding_dim))
+        torch.nn.init.normal_(self.mask_token, std=0.02)
         
         self.patch_and_embed = PatchAndEmbed(in_channels=in_channels,
                                              patch_size=patch_size,
                                              embedding_dim=embedding_dim,
                                              batch_size=batch_size,
-                                             img_size=img_size)
+                                             img_size=img_size,
+                                             phase=phase)
+        
         self.embedding_dropout = torch.nn.Dropout(p=embedding_dropout)
         
         self.transformer_encoder = torch.nn.Sequential(
@@ -205,11 +232,71 @@ class ViT(torch.nn.Module):
         self.projection_head = MIMHead(embedding_dim=embedding_dim,
                                        patch_size=patch_size,
                                        in_channels=in_channels,
-                                       mode="linear")
+                                       mode=projection_head_mode)
+        
+        self.classifier_head = torch.nn.Sequential(
+            torch.nn.LayerNorm(embedding_dim),
+            torch.nn.Linear(in_features=embedding_dim, out_features=num_classes)
+        )
+        
+    def extract_patches(self, x):
+        spatial = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
+
+        x_freq = torch.fft.fft2(x)
+        x_freq = torch.fft.fftshift(x_freq)
+        x_freq = torch.abs(x_freq)
+        x_freq = x_freq / (x_freq.max() + 1e-8)
+        freq = torch.nn.functional.unfold(x_freq, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
+
+        return torch.cat([spatial, freq], dim=1)
+    
+    def random_masking(self, x):
+        B, N, D = x.shape
+        len_keep = int(N* (1-self.mask_ratio))
+        noise = torch.rand(B, N, device=x.device)
+        ids_shuffle = torch.argsort(noise, dim=1)
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
+        
+        ids_keep = ids_shuffle[:, :len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+        
+        mask = torch.ones([B, N], device=x.device)
+        mask[:, :len_keep] = 0
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+        return x_masked, mask, ids_restore
+    
+    def restore_mask(self, x_encoded, mask_token, ids_restore):
+        B, N, D = ids_restore.shape[0], ids_restore.shape[1], x_encoded.shape[2]
+        len_keep = x_encoded.shape[1]
+        
+        mask_tokens = mask_token.expand(B, N-len_keep, -1)
+        x_combined = torch.cat([x_encoded, mask_tokens], dim=1)
+        x_full = torch.gather(x_combined, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
+        return x_full
+    
+    def compute_loss(self, pred, target, mask):
+        loss = (pred-target)**2
+        loss = loss.mean(dim=-1)
+        loss = (loss*mask).sum()/mask.sum()
+        return loss
         
     def forward(self, x):
+        patches = self.extract_patches(x)
         x = self.patch_and_embed(x)
         x = self.embedding_dropout(x)
-        x = self.transformer_encoder(x)
-        x = self.projection_head(x)
-        return x
+        
+        if self.phase == "pretraining":
+            x_masked, mask, ids_restore = self.random_masking(x)
+            x_encoded = self.transformer_encoder(x_masked)
+            x_full = self.restore_mask(x_encoded, self.mask_token, ids_restore)
+            pred = self.projection_head(x_full)
+            loss = self.compute_loss(pred, patches, mask)
+            return pred, loss
+        
+        elif self.phase == "fine-tuning":
+            x = self.transformer_encoder(x)
+            class_token = x[:, -1]
+            logits = self.classifier_head(class_token)
+            return logits
+        
+        raise ValueError("wrong value for phase")
