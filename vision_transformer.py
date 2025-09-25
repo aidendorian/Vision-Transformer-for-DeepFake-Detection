@@ -240,15 +240,25 @@ class ViT(torch.nn.Module):
         )
         
     def extract_patches(self, x):
-        spatial = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
-
+        B, C, H, W = x.shape
+        N = (H // self.patch_size) * (W // self.patch_size)
+        
+        spatial_patches = x.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+        spatial_patches = spatial_patches.contiguous().view(B, C, N, self.patch_size, self.patch_size)
+        spatial_patches = spatial_patches.permute(0, 2, 1, 3, 4)
+        spatial_patches = spatial_patches.reshape(B, N, -1)
+        
         x_freq = torch.fft.fft2(x)
         x_freq = torch.fft.fftshift(x_freq)
         x_freq = torch.abs(x_freq)
-        x_freq = x_freq / (x_freq.max() + 1e-8)
-        freq = torch.nn.functional.unfold(x_freq, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
-
-        return torch.cat([spatial, freq], dim=1)
+        x_freq = x_freq / (x_freq.amax(dim=(2, 3), keepdim=True) + 1e-8)
+        
+        freq_patches = x_freq.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+        freq_patches = freq_patches.contiguous().view(B, C, N, self.patch_size, self.patch_size)
+        freq_patches = freq_patches.permute(0, 2, 1, 3, 4)
+        freq_patches = freq_patches.reshape(B, N, -1)
+    
+        return torch.cat([spatial_patches, freq_patches], dim=1)
     
     def random_masking(self, x):
         B, N, D = x.shape
@@ -274,10 +284,20 @@ class ViT(torch.nn.Module):
         x_full = torch.gather(x_combined, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
         return x_full
     
-    def compute_loss(self, pred, target, mask):
-        loss = (pred-target)**2
+    def compute_loss(self, pred, target, mask, norm_pix=True):  # Change to True
+        B, N, D = pred.shape
+        
+        if norm_pix:
+            target = target.view(B, N, -1)
+            mean = target.mean(dim=-1, keepdim=True)
+            std = target.std(dim=-1, keepdim=True) + 1e-6
+            target_normalized = (target - mean) / std
+            loss = (pred - target_normalized) ** 2
+        else:
+            loss = (pred - target) ** 2
+    
         loss = loss.mean(dim=-1)
-        loss = (loss*mask).sum()/mask.sum()
+        loss = (loss * mask.float()).sum() / (mask.sum() + 1e-5)
         return loss
         
     def forward(self, x):
