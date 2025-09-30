@@ -69,12 +69,21 @@ finetune_dataset = DeepfakeDataset(transform=finetune_transform,
 
 def get_dataloader(phase="pretraining",
                    batch_size=16,
-                   num_workers=4):
+                   num_workers=4,
+                   pin_memory=True,
+                   prefetch_factor=2,
+                   persistent_workers=True):
     if phase == "pretraining":
         return torch.utils.data.DataLoader(pretrain_dataset,
                                            batch_size=batch_size,
-                                           num_workers=num_workers)
+                                           num_workers=num_workers,
+                                           pin_memory=pin_memory,
+                                           persistent_workers=persistent_workers,
+                                           prefetch_factor=prefetch_factor)
     elif phase == "finetuning":
         return torch.utils.data.DataLoader(finetune_dataset,
                                            batch_size=batch_size,
-                                           num_workers=num_workers)
+                                           num_workers=num_workers,
+                                           pin_memory=pin_memory,
+                                           persistent_workers=persistent_workers,
+                                           prefetch_factor=prefetch_factor)
