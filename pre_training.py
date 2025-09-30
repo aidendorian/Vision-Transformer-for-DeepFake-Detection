@@ -1,0 +1,134 @@
+import dataloaders
+import vision_transformer
+import visualization
+import checkpointing
+import torch
+import time
+from torch.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+torch.manual_seed(42)
+
+class Config:
+    def __init__(self):
+        self.batch_size = 50
+        self.epoch = 6
+        self.num_workers = 4
+        self.device = "cuda"
+        self.persistent_workers = True
+        self.prefetch_factor = 2
+        self.pin_memory = True
+        
+        self.img_size = 224
+        self.in_channels = 3
+        self.patch_size = 16
+        self.num_transformer_layers = 12
+        self.embedding_dim = 768
+        self.mlp_size = 3072
+        self.num_heads = 12
+        self.attn_dropout = 0
+        self.mlp_dropout = 0.1
+        self.embedding_dropout = 0.1
+        self.phase = "pretraining"
+        self.projection_head_mode = "linear"
+        self.mask_ratio = 0.75
+        self.num_classes = 2
+        self.norm_pix = True
+
+config = Config()
+
+VisionTransformer = vision_transformer.ViT(
+    batch_size=config.batch_size,
+    img_size=config.img_size,
+    in_channels=config.in_channels,
+    patch_size=config.patch_size,
+    num_transformer_layers=config.num_transformer_layers,
+    embedding_dim=config.embedding_dim,
+    mlp_size=config.mlp_size,
+    num_heads=config.num_heads,
+    attn_dropout=config.attn_dropout,
+    mlp_dropout=config.mlp_dropout,
+    embedding_dropout=config.embedding_dropout,
+    phase=config.phase,
+    projection_head_mode=config.projection_head_mode,
+    mask_ratio=config.mask_ratio,
+    num_classes=config.num_classes,
+    norm_pix=config.norm_pix
+)
+
+pretrain_data = dataloaders.get_dataloader(
+    phase=config.phase,
+    batch_size=config.batch_size,
+    num_workers=config.num_workers,
+    pin_memory=config.pin_memory,
+    prefetch_factor=config.prefetch_factor,
+    persistent_workers=config.persistent_workers
+)
+
+optimizer = torch.optim.AdamW(VisionTransformer.parameters(), lr=0.0001)
+visualizer = visualization.MIMVisualizer()
+
+VisionTransformer.to(config.device)
+VisionTransformer.train()
+
+all_losses = []
+all_steps = []
+current_step = 0
+loss_value = 0.0
+
+for epoch in range(config.epoch):
+    start_time = time.time()
+    epoch_loss = 0.
+    steps = 0
+    
+    for data in pretrain_data:
+        data = data.to(config.device)
+        
+        optimizer.zero_grad()
+        
+        with autocast():
+            reconstructed_patches, loss = VisionTransformer(data)
+        
+        scaler.scale(loss_value).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        loss_value = loss.item()
+        
+        current_step += 1
+        all_losses.append(loss_value)
+        all_steps.append(current_step)
+        epoch_loss += loss_value
+        steps += 1
+        
+        if steps % 100 == 0:
+            print(f"Epoch {epoch+1} | Step {steps} | Loss: {loss_value:.6f}")
+        
+        if steps % 250 == 0:
+            print(f"Generating visualizations at step {current_step}...")
+            
+            with torch.no_grad():
+                sample_data = data[:1]
+                
+                B, C, H, W = sample_data.shape
+                P = config.patch_size
+                N = (H // P) * (W // P)
+                
+                mask = torch.ones(1, 2*N, device=data.device)
+                mask_ratio = config.mask_ratio
+                len_keep = int(2*N * (1 - mask_ratio))
+                mask[:, :len_keep] = 0
+                
+                visualizer.visualize_patch_reconstruction(
+                    sample_data, reconstructed_patches[:1], mask, current_step, loss_value, config.patch_size
+                )
+                
+                visualizer.plot_loss_curve(all_losses, all_steps, current_step)
+    
+    epoch_loss /= steps
+    end_time = time.time()
+    
+    print(f"Epoch {epoch+1}/{config.epoch} | Avg Loss: {epoch_loss:.6f} | Time: {end_time-start_time:.2f}s")
+    
+checkpointing.save_checkpoint(VisionTransformer, optimizer, config.epoch, "checkpoints")
