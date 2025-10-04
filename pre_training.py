@@ -5,6 +5,7 @@ import checkpointing
 import torch
 import time
 from torch.amp import autocast, GradScaler
+import test
 
 scaler = GradScaler()
 
@@ -12,8 +13,8 @@ torch.manual_seed(42)
 
 class Config:
     def __init__(self):
-        self.batch_size = 50
-        self.epoch = 6
+        self.batch_size = 192
+        self.epoch = 20
         self.num_workers = 4
         self.device = "cuda"
         self.persistent_workers = True
@@ -34,11 +35,11 @@ class Config:
         self.projection_head_mode = "linear"
         self.mask_ratio = 0.75
         self.num_classes = 2
-        self.norm_pix = True
+        self.norm_pix = False
 
 config = Config()
 
-VisionTransformer = vision_transformer.ViT(
+VisionTransformer = test.ViT(
     batch_size=config.batch_size,
     img_size=config.img_size,
     in_channels=config.in_channels,
@@ -84,13 +85,12 @@ for epoch in range(config.epoch):
     
     for data in pretrain_data:
         data = data.to(config.device)
-        
         optimizer.zero_grad()
         
-        with autocast():
+        with autocast(device_type=config.device):
             reconstructed_patches, loss = VisionTransformer(data)
-        
-        scaler.scale(loss_value).backward()
+                
+        scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         
@@ -120,8 +120,10 @@ for epoch in range(config.epoch):
                 len_keep = int(2*N * (1 - mask_ratio))
                 mask[:, :len_keep] = 0
                 
+                reconstructed_patches_vis = reconstructed_patches[:1].float()
+                
                 visualizer.visualize_patch_reconstruction(
-                    sample_data, reconstructed_patches[:1], mask, current_step, loss_value, config.patch_size
+                    sample_data, reconstructed_patches_vis, mask, current_step, loss_value, config.patch_size
                 )
                 
                 visualizer.plot_loss_curve(all_losses, all_steps, current_step)
@@ -132,3 +134,5 @@ for epoch in range(config.epoch):
     print(f"Epoch {epoch+1}/{config.epoch} | Avg Loss: {epoch_loss:.6f} | Time: {end_time-start_time:.2f}s")
     
 checkpointing.save_checkpoint(VisionTransformer, optimizer, config.epoch, "checkpoints")
+
+torch.save(VisionTransformer.state_dict(), "models/PreTrained_20_False.pth")
