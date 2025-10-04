@@ -14,9 +14,9 @@ class PatchAndEmbed(torch.nn.Module):
         num_patches = (img_size // patch_size) ** 2
         
         if phase == "pretraining":
-            num_tokens = num_patches * 2
+            num_tokens = num_patches
         elif phase == "fine-tuning":
-            num_tokens = num_patches * 2 + 1
+            num_tokens = num_patches + 1
         
         self.batch_size = batch_size
         self.patches_spatial = torch.nn.Conv2d(in_channels=in_channels,
@@ -43,29 +43,19 @@ class PatchAndEmbed(torch.nn.Module):
     def forward(self, x):
         x_spatial = self.patches_spatial(x)
         
-        x_freq = torch.fft.fft2(x)
-        x_freq = torch.fft.fftshift(x_freq)
-        x_freq = torch.abs(x_freq)
-        x_freq = x_freq / (x_freq.max() + 1e-8)
-        x_freq = self.patches_freq(x_freq)
         
-        x_spatial = self.flatten(x_spatial)
-        x_freq = self.flatten(x_freq)
-        
+        x_spatial = self.flatten(x_spatial)        
         x_spatial = x_spatial.permute(0, 2, 1)
-        x_freq = x_freq.permute(0, 2, 1)
-        
-        x_spatial_freq = torch.cat((x_spatial, x_freq), dim=1)
-        
+                
         if self.phase == "fine-tuning":
             class_token = self.class_embed.expand(self.batch_size, -1, -1)
-            x_tokens = torch.cat((x_spatial_freq, class_token), dim=1)
+            x_tokens = torch.cat((x_spatial, class_token), dim=1)
             position_embed = self.position_embed
             x_tokens = x_tokens + position_embed
             
         elif self.phase == "pretraining":
             position_embed = self.position_embed
-            x_tokens = x_spatial_freq + position_embed
+            x_tokens = x_spatial + position_embed
         
         else:
             raise ValueError("phase can only be 'fine_tuning' or 'pretraining'")        
@@ -200,7 +190,8 @@ class ViT(torch.nn.Module):
                  phase:str="pretraining",
                  projection_head_mode:str="linear",
                  mask_ratio:float=0.75,
-                 num_classes:int=2):
+                 num_classes:int=2,
+                 norm_pix:bool=False):
         super().__init__()
         
         self.mask_ratio = mask_ratio
@@ -208,6 +199,7 @@ class ViT(torch.nn.Module):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.phase = phase
+        self.norm_pix = norm_pix
         
         self.mask_token = torch.nn.Parameter(torch.zeros(1, 1, embedding_dim))
         torch.nn.init.normal_(self.mask_token, std=0.02)
@@ -247,18 +239,8 @@ class ViT(torch.nn.Module):
         spatial_patches = spatial_patches.contiguous().view(B, C, N, self.patch_size, self.patch_size)
         spatial_patches = spatial_patches.permute(0, 2, 1, 3, 4)
         spatial_patches = spatial_patches.reshape(B, N, -1)
-        
-        x_freq = torch.fft.fft2(x)
-        x_freq = torch.fft.fftshift(x_freq)
-        x_freq = torch.abs(x_freq)
-        x_freq = x_freq / (x_freq.amax(dim=(2, 3), keepdim=True) + 1e-8)
-        
-        freq_patches = x_freq.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
-        freq_patches = freq_patches.contiguous().view(B, C, N, self.patch_size, self.patch_size)
-        freq_patches = freq_patches.permute(0, 2, 1, 3, 4)
-        freq_patches = freq_patches.reshape(B, N, -1)
     
-        return torch.cat([spatial_patches, freq_patches], dim=1)
+        return spatial_patches
     
     def random_masking(self, x):
         B, N, D = x.shape
@@ -284,10 +266,10 @@ class ViT(torch.nn.Module):
         x_full = torch.gather(x_combined, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
         return x_full
     
-    def compute_loss(self, pred, target, mask, norm_pix=True):  # Change to True
+    def compute_loss(self, pred, target, mask):
         B, N, D = pred.shape
         
-        if norm_pix:
+        if self.norm_pix:
             target = target.view(B, N, -1)
             mean = target.mean(dim=-1, keepdim=True)
             std = target.std(dim=-1, keepdim=True) + 1e-6
