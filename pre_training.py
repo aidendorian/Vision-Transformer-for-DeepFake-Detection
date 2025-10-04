@@ -39,7 +39,7 @@ class Config:
 
 config = Config()
 
-VisionTransformer = test.ViT(
+VisionTransformer = vision_transformer.ViT(
     batch_size=config.batch_size,
     img_size=config.img_size,
     in_channels=config.in_channels,
