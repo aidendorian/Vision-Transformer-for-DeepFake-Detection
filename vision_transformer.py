@@ -14,9 +14,9 @@ class PatchAndEmbed(torch.nn.Module):
         num_patches = (img_size // patch_size) ** 2
         
         if phase == "pretraining":
-            num_tokens = num_patches
-        elif phase == "fine-tuning":
-            num_tokens = num_patches + 1
+            num_patches = num_patches
+        elif phase == "finetuning":
+            num_patches = num_patches + 1
         
         self.batch_size = batch_size
         self.patches_spatial = torch.nn.Conv2d(in_channels=in_channels,
@@ -34,7 +34,7 @@ class PatchAndEmbed(torch.nn.Module):
         self.class_embed = torch.nn.Parameter(torch.randn(1, 1, embedding_dim),
                                               requires_grad=True)
         
-        self.position_embed = torch.nn.Parameter(torch.randn(1, num_tokens, embedding_dim),
+        self.position_embed = torch.nn.Parameter(torch.randn(1, num_patches, embedding_dim),
                                                  requires_grad=True)
         
         self.flatten = torch.nn.Flatten(start_dim=2,
@@ -43,12 +43,11 @@ class PatchAndEmbed(torch.nn.Module):
     def forward(self, x):
         x_spatial = self.patches_spatial(x)
         
-        
-        x_spatial = self.flatten(x_spatial)        
+        x_spatial = self.flatten(x_spatial)
         x_spatial = x_spatial.permute(0, 2, 1)
-                
-        if self.phase == "fine-tuning":
-            class_token = self.class_embed.expand(self.batch_size, -1, -1)
+        
+        if self.phase == "finetuning":
+            class_token = self.class_embed.expand(x_spatial.shape[0], -1, -1)
             x_tokens = torch.cat((x_spatial, class_token), dim=1)
             position_embed = self.position_embed
             x_tokens = x_tokens + position_embed
@@ -58,7 +57,7 @@ class PatchAndEmbed(torch.nn.Module):
             x_tokens = x_spatial + position_embed
         
         else:
-            raise ValueError("phase can only be 'fine_tuning' or 'pretraining'")        
+            raise ValueError("phase can only be 'finetuning' or 'pretraining'")        
         
         return x_tokens
     
@@ -239,7 +238,7 @@ class ViT(torch.nn.Module):
         spatial_patches = spatial_patches.contiguous().view(B, C, N, self.patch_size, self.patch_size)
         spatial_patches = spatial_patches.permute(0, 2, 1, 3, 4)
         spatial_patches = spatial_patches.reshape(B, N, -1)
-    
+
         return spatial_patches
     
     def random_masking(self, x):
@@ -295,7 +294,7 @@ class ViT(torch.nn.Module):
             loss = self.compute_loss(pred, patches, mask)
             return pred, loss
         
-        elif self.phase == "fine-tuning":
+        elif self.phase == "finetuning":
             x = self.transformer_encoder(x)
             class_token = x[:, -1]
             logits = self.classifier_head(class_token)
