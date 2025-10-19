@@ -1,11 +1,12 @@
 import dataloaders
 import vision_transformer
 import visualization
+# import With_Freq
 import checkpointing
 import torch
 import time
 from torch.amp import autocast, GradScaler
-import test
+from tqdm import tqdm
 
 scaler = GradScaler()
 
@@ -13,8 +14,8 @@ torch.manual_seed(42)
 
 class Config:
     def __init__(self):
-        self.batch_size = 192
-        self.epoch = 20
+        self.batch_size = 150
+        self.epoch = 4
         self.num_workers = 4
         self.device = "cuda"
         self.persistent_workers = True
@@ -25,9 +26,9 @@ class Config:
         self.in_channels = 3
         self.patch_size = 16
         self.num_transformer_layers = 12
-        self.embedding_dim = 768
+        self.embedding_dim = 896
         self.mlp_size = 3072
-        self.num_heads = 12
+        self.num_heads = 14
         self.attn_dropout = 0
         self.mlp_dropout = 0.1
         self.embedding_dropout = 0.1
@@ -36,6 +37,8 @@ class Config:
         self.mask_ratio = 0.75
         self.num_classes = 2
         self.norm_pix = False
+        self.resume_training = False
+        self.checkpoint_path = 'checkpoints/checkpoint_spatial_pretraining_epoch_1.pt'
 
 config = Config()
 
@@ -78,12 +81,22 @@ all_steps = []
 current_step = 0
 loss_value = 0.0
 
-for epoch in range(config.epoch):
+start_epoch = 0
+
+if config.resume_training:
+    start_epoch, _, VisionTransformer, optimizer, scaler = checkpointing.load_checkpoint(VisionTransformer,
+                                                                                         optimizer,
+                                                                                         scaler,
+                                                                                         config.checkpoint_path)
+else:
+    print('Starting Training from Scratch')
+
+for epoch in range(start_epoch, config.epoch):
     start_time = time.time()
     epoch_loss = 0.
     steps = 0
     
-    for data in pretrain_data:
+    for data in tqdm(pretrain_data, desc=f"Epoch {epoch+1}/{config.epoch}"):
         data = data.to(config.device)
         optimizer.zero_grad()
         
@@ -102,12 +115,7 @@ for epoch in range(config.epoch):
         epoch_loss += loss_value
         steps += 1
         
-        if steps % 100 == 0:
-            print(f"Epoch {epoch+1} | Step {steps} | Loss: {loss_value:.6f}")
-        
-        if steps % 250 == 0:
-            print(f"Generating visualizations at step {current_step}...")
-            
+        if steps % 250 == 0:         
             with torch.no_grad():
                 sample_data = data[:1]
                 
@@ -133,6 +141,13 @@ for epoch in range(config.epoch):
     
     print(f"Epoch {epoch+1}/{config.epoch} | Avg Loss: {epoch_loss:.6f} | Time: {end_time-start_time:.2f}s")
     
-checkpointing.save_checkpoint(VisionTransformer, optimizer, config.epoch, "checkpoints")
+    checkpointing.save_checkpoint(VisionTransformer,
+                                  optimizer,
+                                  scaler,
+                                  epoch+1,
+                                  'checkpoints',
+                                  f'checkpoint_spatial_pretraining_epoch_{epoch+1}.pth',
+                                  epoch_loss,
+                                  0)
 
-torch.save(VisionTransformer.state_dict(), "models/PreTrained_20_False.pth")
+torch.save(VisionTransformer.state_dict(), f"models/Spatial_Only_More_than_Base_PreTrained_{config.epoch}.pth")
