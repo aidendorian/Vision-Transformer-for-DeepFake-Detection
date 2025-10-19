@@ -30,46 +30,54 @@ class MIMVisualizer:
         P = patch_size
         N = (H // P) * (W // P)
         
-        pred_patches = reconstructed_patches[0].view(2*N, -1)
+        pred_patches = reconstructed_patches[0].view(2*N, -1)  # [2*N, C*P*P]
         
-        spatial_patches_pred = pred_patches
-
+        spatial_patches_pred = pred_patches#[:N]    # First N: spatial
+        #freq_patches_pred = pred_patches[N:]       # Next N: frequency
+        
+        # Print diagnostic ranges
         spatial_range = [spatial_patches_pred.min().item(), spatial_patches_pred.max().item()]
+        #freq_range = [freq_patches_pred.min().item(), freq_patches_pred.max().item()]
+        #full_range = [reconstructed_patches[0].min().item(), reconstructed_patches[0].max().item()]
         
-        print(f"DIAGNOSTIC - Spatial-only: {spatial_range}")
+        with open('recon_range.txt', 'a') as f:
+            #f.write(f'Step {step}\nFull range: {full_range}\nSpatial-only: {spatial_range}\nFrequency-only: {freq_range}')
+            f.write(f'Step {step}\nSpatial-only: {spatial_range}')
+            f.write('\n\n')
         
         original_normalized = self.normalize_for_display(original_img[0])
-
+        
         spatial_patches_pred = spatial_patches_pred.view(N, C, P, P)
         spatial_patches_normalized = self.normalize_for_display(spatial_patches_pred)
-
+        
         patches_per_row = W // P
         reconstructed_img = self.patches_to_image(spatial_patches_normalized, patches_per_row)
-
+        
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-
+        
         axes[0,0].imshow(original_normalized.permute(1, 2, 0).cpu().numpy())
         axes[0,0].set_title('Original Image')
         axes[0,0].axis('off')
-
+        
         axes[0,1].imshow(reconstructed_img.permute(1, 2, 0).cpu().numpy())
         axes[0,1].set_title('Reconstructed (Spatial)')
         axes[0,1].axis('off')
- 
+        
         diff = torch.abs(original_normalized - reconstructed_img)
         axes[0,2].imshow(diff.permute(1, 2, 0).cpu().numpy(), cmap='hot')
         axes[0,2].set_title('Difference Map')
         axes[0,2].axis('off')
-
+        
         mask_img = mask[0].view(patches_per_row, patches_per_row*2).cpu().numpy()
         axes[1,0].imshow(mask_img, cmap='gray')
         axes[1,0].set_title(f'Mask (White=Masked)\nRatio: {mask[0].mean().item():.2f}')
         axes[1,0].axis('off')
-
+        
         self.plot_patch_statistics(original_img[0], spatial_patches_pred, axes[1,1])
         
         info_text = f'Step: {step}\nLoss: {loss_value:.4f}\n'
         info_text += f'Spatial: [{spatial_range[0]:.3f}, {spatial_range[1]:.3f}]\n'
+        # info_text += f'Freq: [{freq_range[0]:.3f}, {freq_range[1]:.3f}]'
         
         axes[1,2].text(0.5, 0.5, info_text, 
                       ha='center', va='center', transform=axes[1,2].transAxes, fontsize=10)
@@ -80,7 +88,7 @@ class MIMVisualizer:
         plt.savefig(f'{self.save_dir}/recon_step_{step:06d}.png', dpi=100, bbox_inches='tight')
         plt.close()
         
-        print(f"Visualization saved - Original: [{original_img[0].min():.3f}, {original_img[0].max():.3f}]")
+        # print(f"Visualization saved - Original: [{original_img[0].min():.3f}, {original_img[0].max():.3f}]")
     
     def patches_to_image(self, patches, patches_per_row):
         """Convert patches back to full image with safety checks"""
