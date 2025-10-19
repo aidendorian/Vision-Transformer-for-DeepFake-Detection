@@ -1,31 +1,45 @@
 import torch
 import os
 
-def save_checkpoint(model, optimizer, epoch, loss, path="checkpoints"):
-    os.makedirs(path, exist_ok=True)
+def save_checkpoint(model, optimizer, scaler, epoch, save_dir, filename, loss=None, accuracy=None):
+    """Save complete training checkpoint with GradScaler"""
+    os.makedirs(save_dir, exist_ok=True)
     
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'scaler_state_dict': scaler.state_dict(),
         'loss': loss,
+        'accuracy': accuracy,
+        'rng_state': torch.get_rng_state(),
     }
     
-    torch.save(checkpoint, f"{path}/checkpoint_epoch_{epoch}.pth")
-    print(f"Checkpoint saved: {path}/checkpoint_epoch_{epoch}.pth")
+    filepath = os.path.join(save_dir, filename)
+    torch.save(checkpoint, filepath)
+    print(f"Checkpoint saved: {filepath}")
 
-def load_checkpoint(model, optimizer, checkpoint_path):
+def load_checkpoint(model, optimizer, scaler, checkpoint_path):
+    """Load complete training checkpoint with GradScaler"""
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
-        return 0, float('inf')
+        return 0, None, model, optimizer, scaler
     
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
+
+    if 'scaler_state_dict' in checkpoint:
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        print("GradScaler state loaded")
+    else:
+        print("Warning: No GradScaler state found in checkpoint")
+
+    if 'rng_state' in checkpoint:
+        torch.set_rng_state(checkpoint['rng_state'])
     
-    print(f"Checkpoint loaded: {checkpoint_path}")
-    print(f"Resuming from epoch {epoch + 1}, previous loss: {loss:.6f}")
+    epoch = checkpoint.get('epoch', 0)
+    loss = checkpoint.get('loss', None)
     
-    return epoch, loss
+    print(f"Checkpoint loaded from epoch {epoch}")
+    return epoch, loss, model, optimizer, scaler
