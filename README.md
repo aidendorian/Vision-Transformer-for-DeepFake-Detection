@@ -1,171 +1,369 @@
 # Vision Transformer for DeepFake Detection
 
-A PyTorch implementation of Vision Transformer (ViT) for detecting deepfake images using masked image modeling (MIM) for pretraining followed by supervised fine-tuning.
+A PyTorch implementation of Vision Transformer (ViT) for detecting deepfake images using masked image modeling (MIM) pretraining followed by supervised fine-tuning with Grad-CAM visualization support.
+
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
 ## Overview
 
-This project implements a two-stage approach to deepfake detection:
-1. **Pretraining**: Self-supervised learning using Masked Image Modeling (MIM) where the model learns to reconstruct randomly masked image patches
-2. **Fine-tuning**: Supervised classification to distinguish between real and fake images
+This project implements a comprehensive two-stage approach to deepfake detection:
+
+1. **Self-Supervised Pretraining**: Masked Image Modeling (MIM) where the model learns robust visual representations by reconstructing randomly masked image patches (75% masking ratio)
+2. **Supervised Fine-tuning**: Transfer learning on labeled real/fake images with selective layer unfreezing for optimal performance
+3. **Interpretable Predictions**: Grad-CAM visualization to highlight manipulated regions in deepfake images
+
+## Model Accuracy
+Model achieves **85.7%** accuracy in DFDC's Test split and a ROC-AUC of **0.9363**.
+
+## Key Features
+
+- **Masked Autoencoding**: Self-supervised pretraining inspired by MAE (Masked Autoencoders)
+- **Flexible Architecture**: Configurable transformer depth, embedding dimensions, and attention heads
+- **Mixed Precision Training**: FP16 automatic mixed precision for faster training and reduced memory usage
+- **Grad-CAM Visualization**: Interpretable model predictions showing attention on suspicious regions
+- **Checkpoint Management**: Resume training from saved checkpoints with optimizer and scaler states
+- **Comprehensive Evaluation**: Classification reports, confusion matrices, and ROC-AUC metrics
+
+## Datasets Used
+- **Pretraining**: ```torchvision.datasets.CelebA()``` CelebA's train split, ~160K images.
+- **Finetuning**: DFDC's Train split ~140K images, Validation split ~40K images and Test split ~11K images.   
 
 ## Architecture
 
-The Vision Transformer architecture includes:
-- **Patch Embedding**: Converts images into sequence of patch embeddings (16×16 patches)
-- **Transformer Encoder**: 12 layers with multi-head self-attention (12 heads) and MLP blocks
-- **Pretraining Head**: Reconstructs masked patches using linear or convolutional projection
-- **Classification Head**: Binary classifier for real vs fake detection
+The Vision Transformer architecture consists of:
 
-### Key Features
-- Masked autoencoding with 75% masking ratio
-- Position embeddings for spatial information
-- Class token for classification during fine-tuning
-- Mixed precision training support
-- Comprehensive visualization tools
+- **Patch Embedding Layer**: Converts 224×224 images into sequences of 16×16 patch embeddings
+- **Transformer Encoder**: 12-14 layers with multi-head self-attention (12-14 heads) and feedforward MLP blocks
+- **Pretraining Head**: Reconstructs masked patches using linear or convolutional projection
+- **Classification Head**: Layer normalization + linear classifier for binary real/fake classification
+- **Grad-CAM Integration**: Attention visualization on final transformer layer
+
+### Model Specifications
+
+| Component | Default Configuration |
+|-----------|----------------------|
+| Image Size | 224×224 pixels |
+| Patch Size | 16×16 pixels |
+| Embedding Dimension | 768 (Base) / 896 (Large) |
+| Transformer Layers | 12-14 layers |
+| Attention Heads | 12-14 heads |
+| MLP Hidden Size | 3072 |
+| Mask Ratio (Pretraining) | 75% |
+| Total Parameters | ~86M (Base) / ~120M (Large) |
 
 ## Project Structure
 
 ```
-└── 📁Deepfakes_ViT
-    ├── 📁checkpoints          # Model checkpoints
-    ├── 📁data
-    │   ├── 📁finetuning
-    │   │   ├── 📁fake        # Fake images for training
-    │   │   └── 📁real        # Real images for training
-    │   └── 📁pretraining     # Unlabeled images for 
-    ├── 📁models              # Saved model weights
-    ├── 📁visualizations      # Training visualizations and 
-    ├── checkpointing.py      # Checkpoint saving/loading 
-    ├── dataloaders.py        # Dataset and dataloader 
-    ├── fine_tuning.py        # Fine-tuning script
-    ├── pre_training.py       # Pretraining script
-    ├── vision_transformer.py # ViT model architecture
-    └── visualization.py      # Visualization utilities
+Vision-Transformer-for-DeepFake-Detection/
+├── checkpoints/
+├── data/
+│   ├── pretraining/                
+│   └── finetuning/
+│       ├── Train/
+│       │   ├── FAKE/              
+│       │   └── REAL/
+│       ├── Validation/
+│       │   ├── FAKE/
+│       │   └── REAL/
+│       └── Test/
+│           ├── FAKE/
+│           └── REAL/
+├── models/                         
+├── results/            
+├── visualizations/
+├── checkpointing.py                
+├── dataloaders.py                  
+├── grad_cam.py                     
+├── pre_training.py                 
+├── fine_tuning.py                  
+├── infer.py                        
+├── vision_transformer.py           
+├── visualization.py
 ```
 
 ## Requirements
 
 ```bash
 torch>=2.0.0
-torchvision
-PIL
-matplotlib
-numpy
-```
-
-## Dataset Preparation
-
-### Pretraining Data
-Place unlabeled images in `data/pretraining/`. These images are used for self-supervised learning through masked image modeling.
-
-### Fine-tuning Data
-Organize labeled images as follows:
-```
-data/finetuning/
-├── real/  # Real/authentic images (label: 0)
-└── fake/  # Deepfake/synthetic images (label: 1)
+torchvision>=0.15.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+Pillow>=9.5.0
+scikit-learn>=1.3.0
+tqdm>=4.65.0
 ```
 
 ## Usage
 
-### 1. Pretraining
+### 1. Self-Supervised Pretraining
 
-Train the model using masked image modeling:
+Train the Vision Transformer using masked image modeling:
 
-```python
+```bash
 python pre_training.py
 ```
 
-**Configuration** (in `pre_training.py`):
-- `batch_size`: 192
-- `epoch`: 20
-- `img_size`: 224
-- `patch_size`: 16
-- `mask_ratio`: 0.75 (75% of patches masked)
-- `embedding_dim`: 768
-- `num_transformer_layers`: 12
-- `num_heads`: 12
-
-The script will:
-- Generate patch reconstruction visualizations every 250 steps
-- Plot loss curves during training
-- Save checkpoints and final model weights to `models/PreTrained_20_False.pth`
-
-### 2. Fine-tuning
-
-After pretraining, fine-tune the model for deepfake detection:
+**Key Configuration** (edit `Config` class in `pre_training.py`):
 
 ```python
+class Config:
+    batch_size = 120                    
+    epoch = 4
+    embedding_dim = 896                 
+    num_transformer_layers = 12         
+    num_heads = 14                      
+    mask_ratio = 0.75                   
+    projection_head_mode = "linear"     
+    norm_pix = False                    
+```
+
+**Output**:
+- Checkpoints: `checkpoints/checkpoint_spatial_pretraining_epoch_*.pt`
+- Final weights: `models/Spatial_Only_More_than_Base_PreTrained_4.pth`
+- Visualizations: Patch reconstructions and loss curves in `visualizations/`
+
+**Training Features**:
+- Real-time visualization of masked patch reconstruction (every 250 steps)
+- Loss curve plotting
+- Automatic checkpoint saving after each epoch
+- Resume training from checkpoint support
+
+### 2. Supervised Fine-tuning
+
+Load pretrained weights and fine-tune on labeled data:
+
+```bash
 python fine_tuning.py
 ```
 
-Load pretrained weights and train the classifier head on labeled data.
+**Key Configuration**:
+
+```python
+class Config:
+    batch_size = 64
+    epoch = 15                          
+    embedding_dropout = 0.2             
+    unfreezed_transformer_layers = 4    
+    pretrained_model_state_dict = 'Spatial_Only_More_than_Base_PreTrained_4.pth'
+    resume_training = True              
+    checkpoint_path = "checkpoints/checkpoint_finetuning_epoch_15_last_4.pth"
+```
+
+**Transfer Learning Strategy**:
+1. Load pretrained weights
+2. Add learnable class token to position embeddings
+3. Freeze early transformer layers (feature extraction)
+4. Unfreeze last N layers for task-specific adaptation
+5. Train classification head from scratch
+
+**Output**:
+- Checkpoints: `checkpoints/checkpoint_finetuning_epoch_*_last_4.pth`
+- Final model: `models/More_than_Base_Finetuned_15_Last_4.pt`
+- Evaluation metrics: Classification report, confusion matrix, ROC-AUC
+
+### 3. Inference with Grad-CAM Visualization
+
+Predict and visualize manipulated regions:
+
+```bash
+python infer.py
+```
+
+**Usage Example**:
+
+```python
+# Edit img_path in infer.py
+img_path = 'example_images/suspicious_image.jpg'
+
+# Run inference
+prediction, confidence, probabilities, cam, output_path = predict_and_save(model, img_path)
+```
+
+**Output Visualizations** (saved to `results/`):
+- `original_*.png`: Original input image
+- `heatmap_overlay_*.png`: Heatmap overlaid on image (red = suspicious)
+- `heatmap_only_*.png`: Attention heatmap with colorbar
+- `combined_*.png`: Side-by-side comparison of all three
+
+**Grad-CAM Features**:
+- Highlights regions the model focuses on for classification
+- Helps identify manipulated facial features, edges, or artifacts
+- Provides interpretability for model predictions
 
 ## Model Components
 
 ### PatchAndEmbed
-Converts input images into patch embeddings using convolutional layers. Supports both pretraining (no class token) and fine-tuning (with class token) modes.
+
+Converts input images into patch embeddings:
+
+```python
+self.patches_spatial = torch.nn.Conv2d(
+    in_channels=3,
+    out_channels=embedding_dim,
+    kernel_size=patch_size,
+    stride=patch_size,
+    padding=0
+)
+
+self.position_embed = torch.nn.Parameter(
+    torch.randn(1, num_patches, embedding_dim)
+)
+
+self.class_embed = torch.nn.Parameter(
+    torch.randn(1, 1, embedding_dim)
+)
+```
 
 ### TransformerEncoder
-Standard transformer encoder block with:
-- Multi-head self-attention with layer normalization
-- MLP block with GELU activation and dropout
-- Residual connections
 
-### MIMHead
-Projection head for reconstructing masked patches:
-- **Linear mode**: Direct linear projection to patch pixels
-- **Conv mode**: Upsampling decoder with convolutional layers
+Standard transformer block with residual connections:
+
+```python
+def forward(self, x):
+    x = self.msa_block(x) + x      
+    x = self.mlp_block(x) + x
+    return x
+```
+
+### MIMHead (Pretraining)
+
+Reconstructs masked patches:
+
+**Linear Mode**:
+```python
+self.proj = torch.nn.Linear(embedding_dim, patch_size**2 * 3)
+```
+
+**Conv Mode** (better for spatial coherence):
+```python
+self.decoder = torch.nn.Sequential(
+    Upsample -> Conv2d -> GELU -> Upsample -> Conv2d
+)
+```
 
 ### Masking Strategy
-- Random masking of 75% of patches during pretraining
-- Mask tokens are learnable parameters
-- Shuffle and restore mechanism maintains spatial correspondence
+
+```python
+def random_masking(self, x):
+    ids_shuffle = torch.argsort(torch.rand(B, N))
+
+    ids_keep = ids_shuffle[:, :len_keep]
+    x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+    mask = torch.ones([B, N])
+    mask[:, :len_keep] = 0
+    
+    return x_masked, mask, ids_restore
+```
+
+### Loss Functions
+
+**Pretraining** (MSE on masked patches):
+```python
+def compute_loss(self, pred, target, mask):
+    if self.norm_pix:
+        target_normalized = (target - mean) / std
+        loss = (pred - target_normalized) ** 2
+    else:
+        loss = (pred - target) ** 2
+    
+    loss = (loss.mean(dim=-1) * mask).sum() / mask.sum()
+    return loss
+```
+
+**Fine-tuning** (Cross-entropy):
+```python
+loss_fn = torch.nn.CrossEntropyLoss()
+loss = loss_fn(predictions, labels)
+```
 
 ## Training Features
 
-- **Mixed Precision Training**: Uses `torch.amp` for faster training and reduced memory usage
-- **Gradient Scaling**: Prevents underflow in fp16 training
-- **Data Augmentation**: Random crops, horizontal flips, color jittering
-- **Checkpointing**: Regular model and optimizer state saves
-- **Visualization**: Real-time monitoring of reconstructions and loss curves
+### Mixed Precision Training
+
+Automatic mixed precision for faster training:
+
+```python
+scaler = GradScaler()
+
+with autocast(device_type='cuda'):
+    outputs = model(images)
+    loss = loss_fn(outputs, labels)
+
+scaler.scale(loss).backward()
+scaler.step(optimizer)
+scaler.update()
+```
+
+### Checkpoint Management
+
+```python
+# to save
+checkpointing.save_checkpoint(
+    model, optimizer, scaler,
+    epoch=5,
+    save_dir='checkpoints',
+    filename='checkpoint_epoch_5.pth',
+    loss=0.123,
+    accuracy=0.95
+)
+
+# to load
+start_epoch, _, model, optimizer, scaler = checkpointing.load_checkpoint(
+    model, optimizer, scaler,
+    checkpoint_path='checkpoints/checkpoint_epoch_5.pth'
+)
+```
+
+**Metrics**:
+```
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.88      0.83      0.85      5492
+           1       0.84      0.88      0.86      5413
+
+    accuracy                           0.86     10905
+   macro avg       0.86      0.86      0.86     10905
+weighted avg       0.86      0.86      0.86     10905
+
+ROC-AUC: 0.9363
+Confusion Matrix:
+[[4563  929]
+ [ 641 4772]]
+
+Test Loss: 0.33330712863924905 | Test Accuracy: 0.8569773390279178
+```
 
 ## Hyperparameters
 
+### Pretraining
+
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Image Size | 224×224 | Input image resolution |
-| Patch Size | 16×16 | Size of each image patch |
-| Embedding Dim | 768 | Token embedding dimension |
-| MLP Size | 3072 | Hidden dimension in MLP blocks |
-| Num Heads | 12 | Number of attention heads |
-| Num Layers | 12 | Number of transformer layers |
-| Mask Ratio | 0.75 | Percentage of patches to mask |
-| Batch Size | 192 | Training batch size |
-| Learning Rate | 0.0001 | AdamW optimizer learning rate |
+| Batch Size | 120 | Images per batch |
+| Epochs | 4 | Training epochs |
+| Embedding Dim | 896 | Token dimension |
+| Transformer Layers | 12 | Encoder depth |
+| Attention Heads | 14 | Multi-head count |
+| MLP Size | 3072 | Feedforward hidden dim |
+| Mask Ratio | 0.75 | Percentage masked |
+| Learning Rate | 0.0001 | AdamW LR |
+| Dropout | 0.1 | MLP dropout |
 
-## Outputs
+### Fine-tuning
 
-### Checkpoints
-- Periodic checkpoints saved in `checkpoints/`
-- Final pretrained model: `models/`
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Batch Size | 64 | Images per batch |
+| Epochs | 15 | Training epochs |
+| Learning Rate | 0.00001 | Lower LR for fine-tuning |
+| Embedding Dropout | 0.1 | Regularization |
+| Unfrozen Layers | 4 | Last N layers trainable |
+| Optimizer | AdamW | Weight decay optimizer |
 
-### Visualizations
-- Patch reconstruction comparisons (original vs reconstructed)
-- Training loss curves
-- Saved in `visualizations/` directory
+## Acknowledgments
 
-## Implementation Details
-
-### Patch Extraction
-Images are divided into non-overlapping 16×16 patches, flattened and linearly embedded into 768-dimensional vectors.
-
-### Position Encoding
-Learnable position embeddings are added to patch embeddings to retain spatial information.
-
-### Loss Computation
-Mean squared error (MSE) between predicted and actual patch values, computed only on masked patches.
-
-### Phase Modes
-- **Pretraining**: Uses masked autoencoding objective, no class token
-- **Fine-tuning**: Adds class token, uses classification head
+- Vision Transformer architecture based on [An Image is Worth 16x16 Words](https://arxiv.org/abs/2010.11929)
+- Masked Autoencoder pretraining inspired by [Masked Autoencoders Are Scalable Vision Learners](https://arxiv.org/abs/2111.06377)
+---
