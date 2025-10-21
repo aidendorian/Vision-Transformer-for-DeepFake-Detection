@@ -1,42 +1,21 @@
 import torch
-import os
-from PIL import Image
 import torchvision
-
-class DeepfakeDataset(torch.utils.data.Dataset):
-    def __init__(self, transform=None):
-        super().__init__()
-                
-        self.transform = transform
-        self.samples = [os.path.join("data/pretraining", f)
-                        for f in os.listdir("data/pretraining")]
-            
-    def __len__(self):
-        return len(self.samples)
-    
-    def __getitem__(self, index):
-        img_path = self.samples[index]
-        image = Image.open(img_path).convert("RGB")
-            
-        if self.transform:
-            image = self.transform(image)
-            
-        return image
             
 pretrain_transform = torchvision.transforms.Compose([
-    torchvision.transforms.RandomResizedCrop(224),
+    torchvision.transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
     torchvision.transforms.RandomHorizontalFlip(),
     torchvision.transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
-    torchvision.transforms.ToTensor()
+    torchvision.transforms.ToTensor(),
+    torchvision.transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
 ])
 
 finetune_transform = torchvision.transforms.Compose([
-    torchvision.transforms.RandomResizedCrop(224),
+    torchvision.transforms.CenterCrop(224),
     torchvision.transforms.RandomHorizontalFlip(),
-    torchvision.transforms.ToTensor()
+    torchvision.transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+    torchvision.transforms.ToTensor(),
+    torchvision.transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
 ])
-
-pretrain_dataset = DeepfakeDataset(transform=pretrain_transform)
 
 def get_dataloader(phase="pretraining",
                    batch_size=16,
@@ -47,12 +26,18 @@ def get_dataloader(phase="pretraining",
     
     if phase == "pretraining":
         
+        pretrain_dataset = torchvision.datasets.CelebA(root='/home/oslyris/Deepfakes_ViT/data/pretraining',
+                                                       split='train',
+                                                       transform=pretrain_transform,
+                                                       download=False)
+        
         return torch.utils.data.DataLoader(pretrain_dataset,
                                            batch_size=batch_size,
                                            num_workers=num_workers,
                                            pin_memory=pin_memory,
                                            persistent_workers=persistent_workers,
-                                           prefetch_factor=prefetch_factor)
+                                           prefetch_factor=prefetch_factor,
+                                           shuffle=True)
     elif phase == "finetuning":
 
         train_dataset = torchvision.datasets.ImageFolder("data/finetuning/Train",
