@@ -14,7 +14,7 @@ torch.manual_seed(42)
 
 class Config:
     def __init__(self):
-        self.batch_size = 150
+        self.batch_size = 120
         self.epoch = 4
         self.num_workers = 4
         self.device = "cuda"
@@ -25,7 +25,7 @@ class Config:
         self.img_size = 224
         self.in_channels = 3
         self.patch_size = 16
-        self.num_transformer_layers = 12
+        self.num_transformer_layers = 14
         self.embedding_dim = 896
         self.mlp_size = 3072
         self.num_heads = 14
@@ -96,7 +96,7 @@ for epoch in range(start_epoch, config.epoch):
     epoch_loss = 0.
     steps = 0
     
-    for data in tqdm(pretrain_data, desc=f"Epoch {epoch+1}/{config.epoch}"):
+    for data, _ in tqdm(pretrain_data, desc=f"Epoch {epoch+1}/{config.epoch}"):
         data = data.to(config.device)
         optimizer.zero_grad()
         

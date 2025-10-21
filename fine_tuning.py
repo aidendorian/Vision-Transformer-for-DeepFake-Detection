@@ -5,15 +5,14 @@ import torch
 import time
 from torch.amp import autocast, GradScaler
 from tqdm import tqdm
-import Freq_Spatial
 
 scaler = GradScaler()
 torch.manual_seed(42)
 
 class Config:
     def __init__(self):
-        self.batch_size = 32
-        self.epoch = 4
+        self.batch_size = 64
+        self.epoch = 24
         self.num_workers = 4
         self.device = "cuda"
         self.persistent_workers = True
@@ -37,8 +36,8 @@ class Config:
         self.norm_pix = False
         self.unfreezed_transformer_layers = 4
         self.resume_training = True
-        self.checkpoint_path = "checkpoints/checkpoint_finetuning_epoch_3_last_4.pth"
-        self.pretrained_model_state_dict = 'More_than_Base_PreTrained_4.pth'
+        self.checkpoint_path = "checkpoints/checkpoint_finetuning_epoch_24_last_4.pth"
+        self.pretrained_model_state_dict = 'Spatial_Only_More_than_Base_PreTrained_4.pth'
 
 config = Config()
 
@@ -69,7 +68,7 @@ train_data, val_data, test_data = dataloaders.get_dataloader(phase=config.phase,
                                                              persistent_workers=config.persistent_workers
                                                              )
 
-optimizer = torch.optim.AdamW(VisionTransformer.parameters(), lr=0.00001)
+optimizer = torch.optim.AdamW(VisionTransformer.parameters(), lr=0.0001)
 loss_fn = torch.nn.CrossEntropyLoss()
 
 VisionTransformer.to(config.device)
@@ -160,12 +159,15 @@ for epoch in range(start_epoch, config.epoch):
                 val_preds = VisionTransformer(val_img)
                 val_loss += loss_fn(val_preds, val_labels).item()
                 val_steps += 1
+                
+            _, val_pred = torch.max(val_preds, dim=1)
+            val_acc = (preds == train_labels).float().mean().item()
     
     val_loss /= val_steps
     
     end_time = time.time()
     
-    print(f"Epoch {epoch+1}/{config.epoch} | Train Loss: {epoch_loss:.6f} | Train Acc: {epoch_acc:.6f} | Val Loss: {val_loss:.6f} | Time: {end_time-start_time:.2f}s")
+    print(f"Epoch {epoch+1}/{config.epoch} | Train Loss: {epoch_loss:.6f} | Train Acc: {epoch_acc:.6f} | Val Loss: {val_loss:.6f} | Val Acc: {val_acc} | Time: {end_time-start_time:.2f}s")
     
     checkpointing.save_checkpoint(
         VisionTransformer, 
@@ -184,6 +186,37 @@ VisionTransformer.eval()
 test_loss = 0.
 test_steps = 0
 test_acc = 0.
+
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+def comprehensive_evaluation(model, test_loader):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    all_probs = []
+    
+    with torch.no_grad():
+        for images, labels in tqdm(test_loader, desc='Classification Report'):
+            images, labels = images.to(config.device), labels.to(config.device)
+            with autocast(device_type=config.device):
+                outputs = model(images)
+            probs = torch.softmax(outputs, dim=1)
+            _, preds = torch.max(outputs, 1)
+            
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
+    
+    print("Classification Report:")
+    print(classification_report(all_labels, all_preds))
+    
+    print(f"ROC-AUC: {roc_auc_score(all_labels, [p[1] for p in all_probs]):.4f}")
+    
+    cm = confusion_matrix(all_labels, all_preds)
+    print("Confusion Matrix:")
+    print(cm)
+
+comprehensive_evaluation(VisionTransformer, test_data)
 
 with torch.no_grad():
     for test_img, test_labels in tqdm(test_data, desc='Testing'):
